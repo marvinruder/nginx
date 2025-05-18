@@ -1,0 +1,126 @@
+name: Build and publish custom nginx image
+
+on:
+  schedule:
+    - cron: '0 23 * * *'
+  workflow_dispatch:
+    inputs:
+      FORCE_BUILD:
+        description: 'Force build even if image exists'
+        type: boolean
+        required: false
+        default: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04-arm
+    outputs:
+      BOM_SHA256: ${{ steps.bom.outputs.BOM_SHA256 }}
+      BOM_SHA256_SHORT: ${{ steps.bom.outputs.BOM_SHA256_SHORT }}
+      NGINX_VERSION: ${{ steps.bom.outputs.NGINX_VERSION }}
+      NGINX_JWT_VERSION: ${{ steps.bom.outputs.NGINX_JWT_VERSION }}
+      NGINX_KEYVAL_VERSION: ${{ steps.bom.outputs.NGINX_KEYVAL_VERSION }}
+      NGX_ZSTD_VERSION: ${{ steps.bom.outputs.NGX_ZSTD_VERSION }}
+      SKIP_BUILD: ${{ steps.check_image.outputs.SKIP_BUILD }}
+      TIMESTAMP: ${{ steps.bom.outputs.TIMESTAMP }}
+    steps:
+
+      - name: Create current bill of materials
+        id: bom
+        run: |
+          echo TIMESTAMP=$(date -u +'%Y-%m-%dT%H:%M:%SZ') >> $GITHUB_OUTPUT
+          echo $(skopeo inspect docker://docker.io/nginx:stable-alpine-slim | jq -r '.Env[] | select(contains("NGINX_VERSION"))') | tee -a $GITHUB_OUTPUT >> bom
+          curl -fsSL https://raw.githubusercontent.com/nginx/pkg-oss/refs/heads/master/contrib/src/ngx_brotli/version >> bom
+          curl -fsSL https://raw.githubusercontent.com/nginx/pkg-oss/refs/heads/master/contrib/src/ngx_http_geoip2_module/version >> bom
+          curl -fsSL https://raw.githubusercontent.com/nginx/pkg-oss/refs/heads/master/contrib/src/njs/version >> bom
+          echo NGINX_JWT_VERSION=$(curl -fsSL https://api.github.com/repos/kjdev/nginx-auth-jwt/tags | jq -r '.[0].name') | tee -a $GITHUB_OUTPUT >> bom
+          echo NGINX_KEYVAL_VERSION=$(curl -fsSL https://api.github.com/repos/kjdev/nginx-keyval/tags | jq -r '.[0].name') | tee -a $GITHUB_OUTPUT >> bom
+          echo NGX_ZSTD_VERSION=$(curl -fsSL https://api.github.com/repos/tokers/zstd-nginx-module/tags | jq -r '.[0].name') | tee -a $GITHUB_OUTPUT >> bom
+          cat bom
+          echo BOM_SHA256=$(sha256sum bom | head -c 64) | tee -a $GITHUB_OUTPUT
+          echo BOM_SHA256_SHORT=$(sha256sum bom | head -c 8) | tee -a $GITHUB_OUTPUT
+
+      - name: Check for existing image
+        id: check_image
+        run: |
+          if skopeo inspect docker://${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest | jq -r '.Labels["org.opencontainers.image.revision"]' | grep -q "${{ steps.bom.outputs.BOM_SHA256 }}"; then
+            echo "Image already exists, skipping build unless forced."
+            echo "SKIP_BUILD=true" >> $GITHUB_OUTPUT
+          else
+            echo "Image does not exist, proceeding with build."
+            echo "SKIP_BUILD=false" >> $GITHUB_OUTPUT
+          fi
+
+  build:
+    runs-on: ubuntu-24.04-arm
+    needs: prepare
+    if: ${{ needs.prepare.outputs.SKIP_BUILD != 'true' || inputs.FORCE_BUILD == true }}
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+    steps:
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Prepare build context
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/nginx/docker-nginx/refs/heads/master/modules/Dockerfile.alpine | head -c -1 > Dockerfile
+          echo " && rm /usr/lib/nginx/modules/*-debug.so" >> Dockerfile
+          mkdir jwt keyval zstd
+          echo jansson-dev > jwt/build-deps
+          echo zstd-dev > zstd/build-deps
+          echo https://github.com/kjdev/nginx-auth-jwt/archive/refs/tags/${{ needs.prepare.outputs.NGINX_JWT_VERSION }}.tar.gz > jwt/source
+          echo https://github.com/kjdev/nginx-keyval/archive/refs/tags/${{ needs.prepare.outputs.NGINX_KEYVAL_VERSION }}.tar.gz > keyval/source
+          echo https://github.com/tokers/zstd-nginx-module/archive/refs/tags/${{ needs.prepare.outputs.NGX_ZSTD_VERSION }}.tar.gz > zstd/source
+
+      - name: Build and push image
+        id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          build-args: |
+            NGINX_FROM_IMAGE=nginx:stable-alpine-slim
+            ENABLED_MODULES=njs brotli geoip2 jwt keyval zstd
+          labels: |
+            org.opencontainers.image.title=${{ github.repository }}
+            org.opencontainers.image.description=${{ github.event.repository.description }}
+            org.opencontainers.image.vendor=${{ github.repository_owner }}
+            org.opencontainers.image.url=${{ github.event.repository.html_url }}
+            org.opencontainers.image.source=${{ github.event.repository.html_url }}
+            org.opencontainers.image.licenses=BSD-2-Clause
+            org.opencontainers.image.created=${{ needs.prepare.outputs.TIMESTAMP }}
+            org.opencontainers.image.version=${{ needs.prepare.outputs.NGINX_VERSION }}
+            org.opencontainers.image.revision=${{ needs.prepare.outputs.BOM_SHA256 }}
+          outputs: "type=image,name=target,\
+            annotation-index.org.opencontainers.image.title=${{ github.repository }},\
+            annotation-index.org.opencontainers.image.description=${{ github.event.repository.description }},\
+            annotation-index.org.opencontainers.image.vendor=${{ github.repository_owner }},\
+            annotation-index.org.opencontainers.image.url=${{ github.event.repository.html_url }},\
+            annotation-index.org.opencontainers.image.source=${{ github.event.repository.html_url }},\
+            annotation-index.org.opencontainers.image.licenses=BSD-2-Clause,\
+            annotation-index.org.opencontainers.image.created=${{ needs.prepare.outputs.TIMESTAMP }},\
+            annotation-index.org.opencontainers.image.version=${{ needs.prepare.outputs.NGINX_VERSION }},\
+            annotation-index.org.opencontainers.image.revision=${{ needs.prepare.outputs.BOM_SHA256 }}"
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.NGINX_VERSION }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.NGINX_VERSION }}-${{ needs.prepare.outputs.BOM_SHA256_SHORT }}
+          provenance: false
+          push: true
