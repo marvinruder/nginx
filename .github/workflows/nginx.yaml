@@ -33,6 +33,7 @@ jobs:
         id: bom
         run: |
           echo TIMESTAMP=$(date -u +'%Y-%m-%dT%H:%M:%SZ') >> $GITHUB_OUTPUT
+          echo BASE_IMAGE_DIGEST=$(skopeo inspect docker://docker.io/nginx:stable-alpine-slim | jq -r '.Digest') | tee -a $GITHUB_OUTPUT >> bom
           echo $(skopeo inspect docker://docker.io/nginx:stable-alpine-slim | jq -r '.Env[] | select(contains("NGINX_VERSION"))') | tee -a $GITHUB_OUTPUT >> bom
           curl -fsSL https://raw.githubusercontent.com/nginx/pkg-oss/refs/heads/master/contrib/src/ngx_brotli/version >> bom
           curl -fsSL https://raw.githubusercontent.com/nginx/pkg-oss/refs/heads/master/contrib/src/ngx_http_geoip2_module/version >> bom
@@ -62,7 +63,6 @@ jobs:
     permissions:
       contents: read
       packages: write
-      attestations: write
     steps:
 
       - name: Login to GitHub Container Registry
