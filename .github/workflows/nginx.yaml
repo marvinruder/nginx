@@ -25,6 +25,7 @@ jobs:
       NGINX_JWT_VERSION: ${{ steps.bom.outputs.NGINX_JWT_VERSION }}
       NGINX_KEYVAL_VERSION: ${{ steps.bom.outputs.NGINX_KEYVAL_VERSION }}
       NGX_ZSTD_VERSION: ${{ steps.bom.outputs.NGX_ZSTD_VERSION }}
+      NGINX_OIDC_NJS_URL: ${{ steps.bom.outputs.NGINX_OIDC_NJS_URL }}
       SKIP_BUILD: ${{ steps.check_image.outputs.SKIP_BUILD }}
       TIMESTAMP: ${{ steps.bom.outputs.TIMESTAMP }}
     steps:
@@ -41,6 +42,7 @@ jobs:
           echo NGINX_JWT_VERSION=$(curl -fsSL https://api.github.com/repos/kjdev/nginx-auth-jwt/tags | jq -r '.[0].name') | tee -a $GITHUB_OUTPUT >> bom
           echo NGINX_KEYVAL_VERSION=$(curl -fsSL https://api.github.com/repos/kjdev/nginx-keyval/tags | jq -r '.[0].name') | tee -a $GITHUB_OUTPUT >> bom
           echo NGX_ZSTD_VERSION=$(curl -fsSL https://api.github.com/repos/tokers/zstd-nginx-module/tags | jq -r '.[0].name') | tee -a $GITHUB_OUTPUT >> bom
+          echo NGINX_OIDC_NJS_URL=$(curl -fsSL https://api.github.com/repos/jirutka/nginx-oidc-njs/releases | jq -r '.[0].assets.[] | select(.name | test("nginx-oidc-njs-.+\\.tar\\.gz$")) | .browser_download_url') | tee -a $GITHUB_OUTPUT >> bom
           cat bom
           echo BOM_SHA256=$(sha256sum bom | head -c 64) | tee -a $GITHUB_OUTPUT
           echo BOM_SHA256_SHORT=$(sha256sum bom | head -c 8) | tee -a $GITHUB_OUTPUT
@@ -80,8 +82,10 @@ jobs:
 
       - name: Prepare build context
         run: |
-          curl -fsSL https://raw.githubusercontent.com/nginx/docker-nginx/refs/heads/master/modules/Dockerfile.alpine | head -c -1 > Dockerfile
-          echo " && rm /usr/lib/nginx/modules/*-debug.so" >> Dockerfile
+          curl -fsSL https://raw.githubusercontent.com/nginx/docker-nginx/refs/heads/master/modules/Dockerfile.alpine | sed '$s/$/ \\/' > Dockerfile
+          echo '    && rm /usr/lib/nginx/modules/*-debug.so \' >> Dockerfile
+          echo '    && mkdir -p /usr/local/share/nginx-oidc-njs \' >> Dockerfile
+          echo '    && wget -qO- ${{ needs.prepare.outputs.NGINX_OIDC_NJS_URL }} | tar xz -C /usr/local/share/nginx-oidc-njs/ --strip-components=1' >> Dockerfile
           mkdir jwt keyval zstd
           echo jansson-dev > jwt/build-deps
           echo zstd-dev > zstd/build-deps
