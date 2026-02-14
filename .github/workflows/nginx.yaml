@@ -83,12 +83,13 @@ jobs:
 
       - name: Prepare build context
         run: |
-          curl -fsSL https://raw.githubusercontent.com/nginx/docker-nginx/refs/heads/master/modules/Dockerfile.alpine | sed '$s/$/ \\/' > Dockerfile
+          curl -fsSL https://raw.githubusercontent.com/nginx/docker-nginx/refs/heads/master/modules/Dockerfile.alpine | sed '$s/$/ \\/; s/ARG ENABLED_MODULES/&\nARG NGX_KEYVAL_ZONE_REDIS/' > Dockerfile
           echo '    && rm /usr/lib/nginx/modules/*-debug.so \' >> Dockerfile
           echo '    && mkdir -p /usr/local/share/nginx-oidc-njs \' >> Dockerfile
           echo '    && wget -qO- ${{ needs.prepare.outputs.NGINX_OIDC_NJS_URL }} | tar xz -C /usr/local/share/nginx-oidc-njs/ --strip-components=1' >> Dockerfile
           mkdir jwt keyval zstd
           echo jansson-dev > jwt/build-deps
+          echo hiredis-dev > keyval/build-deps
           echo zstd-dev > zstd/build-deps
           echo https://github.com/kjdev/nginx-auth-jwt/archive/refs/tags/${{ needs.prepare.outputs.NGINX_JWT_VERSION }}.tar.gz > jwt/source
           echo https://github.com/kjdev/nginx-keyval/archive/refs/tags/${{ needs.prepare.outputs.NGINX_KEYVAL_VERSION }}.tar.gz > keyval/source
@@ -102,6 +103,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           build-args: |
             NGINX_FROM_IMAGE=${{ env.NGINX_FROM_IMAGE }}
+            NGX_KEYVAL_ZONE_REDIS=1
             ENABLED_MODULES=njs brotli geoip2 jwt keyval zstd
           labels: |
             org.opencontainers.image.title=${{ github.repository }}
