@@ -28,13 +28,11 @@ jobs:
       NGX_ZSTD_VERSION: ${{ steps.bom.outputs.NGX_ZSTD_VERSION }}
       NGINX_OIDC_NJS_URL: ${{ steps.bom.outputs.NGINX_OIDC_NJS_URL }}
       SKIP_BUILD: ${{ steps.check_image.outputs.SKIP_BUILD }}
-      TIMESTAMP: ${{ steps.bom.outputs.TIMESTAMP }}
     steps:
 
       - name: Create current bill of materials
         id: bom
         run: |
-          echo TIMESTAMP=$(date -u +'%Y-%m-%dT%H:%M:%SZ') >> $GITHUB_OUTPUT
           echo BASE_IMAGE_DIGEST=$(skopeo inspect docker://docker.io/${{ env.NGINX_FROM_IMAGE }} | jq -r '.Digest') | tee -a $GITHUB_OUTPUT >> bom
           echo $(skopeo inspect docker://docker.io/${{ env.NGINX_FROM_IMAGE }} | jq -r '.Env[] | select(contains("NGINX_VERSION"))') | tee -a $GITHUB_OUTPUT >> bom
           curl -fsSL https://raw.githubusercontent.com/nginx/pkg-oss/refs/heads/master/contrib/src/ngx_brotli/version >> bom
@@ -60,7 +58,15 @@ jobs:
           fi
 
   build:
-    runs-on: ubuntu-24.04-arm
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - platform: linux/amd64
+          runner: ubuntu-24.04
+        - platform: linux/arm64
+          runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     needs: prepare
     if: ${{ needs.prepare.outputs.SKIP_BUILD != 'true' || inputs.FORCE_BUILD == true }}
     permissions:
@@ -68,15 +74,30 @@ jobs:
       packages: write
     steps:
 
+      - name: Prepare
+        id: prepare
+        run: |
+          platform=${{ matrix.platform }}
+          echo "PLATFORM_PAIR=${platform//\//-}" | tee -a $GITHUB_OUTPUT
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          labels: |
+            org.opencontainers.image.version=${{ needs.prepare.outputs.NGINX_VERSION }}
+            org.opencontainers.image.revision=${{ needs.prepare.outputs.BOM_SHA256 }}
+          annotations: |
+            org.opencontainers.image.version=${{ needs.prepare.outputs.NGINX_VERSION }}
+            org.opencontainers.image.revision=${{ needs.prepare.outputs.BOM_SHA256 }}
+
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -95,39 +116,86 @@ jobs:
           echo https://github.com/kjdev/nginx-keyval/archive/refs/tags/${{ needs.prepare.outputs.NGINX_KEYVAL_VERSION }}.tar.gz > keyval/source
           echo https://github.com/tokers/zstd-nginx-module/archive/refs/tags/${{ needs.prepare.outputs.NGX_ZSTD_VERSION }}.tar.gz > zstd/source
 
-      - name: Build and push image
-        id: push
+      - name: Build and push by digest
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
           build-args: |
             NGINX_FROM_IMAGE=${{ env.NGINX_FROM_IMAGE }}
             NGX_KEYVAL_ZONE_REDIS=1
             ENABLED_MODULES=njs brotli geoip2 jwt keyval zstd
-          labels: |
-            org.opencontainers.image.title=${{ github.repository }}
-            org.opencontainers.image.description=${{ github.event.repository.description }}
-            org.opencontainers.image.vendor=${{ github.repository_owner }}
-            org.opencontainers.image.url=${{ github.event.repository.html_url }}
-            org.opencontainers.image.source=${{ github.event.repository.html_url }}
-            org.opencontainers.image.licenses=BSD-2-Clause
-            org.opencontainers.image.created=${{ needs.prepare.outputs.TIMESTAMP }}
+          platforms: ${{ matrix.platform }}
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          outputs: type=image,push-by-digest=true,name-canonical=true,push=true
+
+      - name: Export digest
+        run: |
+          mkdir -p ${{ runner.temp }}/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "${{ runner.temp }}/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ steps.prepare.outputs.PLATFORM_PAIR }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    runs-on: ubuntu-24.04-arm
+    needs:
+      - prepare
+      - build
+    steps:
+
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          annotations: |
             org.opencontainers.image.version=${{ needs.prepare.outputs.NGINX_VERSION }}
             org.opencontainers.image.revision=${{ needs.prepare.outputs.BOM_SHA256 }}
-          outputs: "type=image,name=target,\
-            annotation-index.org.opencontainers.image.title=${{ github.repository }},\
-            annotation-index.org.opencontainers.image.description=${{ github.event.repository.description }},\
-            annotation-index.org.opencontainers.image.vendor=${{ github.repository_owner }},\
-            annotation-index.org.opencontainers.image.url=${{ github.event.repository.html_url }},\
-            annotation-index.org.opencontainers.image.source=${{ github.event.repository.html_url }},\
-            annotation-index.org.opencontainers.image.licenses=BSD-2-Clause,\
-            annotation-index.org.opencontainers.image.created=${{ needs.prepare.outputs.TIMESTAMP }},\
-            annotation-index.org.opencontainers.image.version=${{ needs.prepare.outputs.NGINX_VERSION }},\
-            annotation-index.org.opencontainers.image.revision=${{ needs.prepare.outputs.BOM_SHA256 }}"
           tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.NGINX_VERSION }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.NGINX_VERSION }}-${{ needs.prepare.outputs.BOM_SHA256_SHORT }}
-          provenance: false
-          push: true
+            latest
+            ${{ needs.prepare.outputs.NGINX_VERSION }}
+            ${{ needs.prepare.outputs.NGINX_VERSION }}-${{ needs.prepare.outputs.BOM_SHA256_SHORT }}
+        env:
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: index
+
+      - name: Create manifest list and push
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          CMD='docker buildx imagetools create'
+          CMD+=' '
+          CMD+=$(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON")
+          CMD+=' '
+          CMD+=$(jq -cr '.annotations | map("--annotation \"" + . + "\"") | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON")
+          CMD+=' '
+          CMD+=$(printf '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:%s ' *)
+          eval $CMD
+
+      - name: Inspect image
+        run: |
+          docker buildx imagetools inspect ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
