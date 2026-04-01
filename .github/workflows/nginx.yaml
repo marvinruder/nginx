@@ -114,7 +114,8 @@ jobs:
           echo zstd-dev > zstd/build-deps
           echo https://github.com/kjdev/nginx-auth-jwt/archive/refs/tags/${{ needs.prepare.outputs.NGINX_JWT_VERSION }}.tar.gz > jwt/source
           echo https://github.com/kjdev/nginx-keyval/archive/refs/tags/${{ needs.prepare.outputs.NGINX_KEYVAL_VERSION }}.tar.gz > keyval/source
-          echo https://github.com/tokers/zstd-nginx-module/archive/refs/tags/${{ needs.prepare.outputs.NGX_ZSTD_VERSION }}.tar.gz > zstd/source
+          # Pin commit SHA until https://github.com/tokers/zstd-nginx-module/pull/31#issuecomment-4169434111 is resolved:
+          echo https://github.com/tokers/zstd-nginx-module/archive/f4ba115e0b0eaecde545e5f37db6aa18917d8f4b.tar.gz > zstd/source
 
       - name: Build and push by digest
         id: build
@@ -123,8 +124,8 @@ jobs:
           context: .
           build-args: |
             NGINX_FROM_IMAGE=${{ env.NGINX_FROM_IMAGE }}
-            NGX_KEYVAL_ZONE_REDIS=1
             ENABLED_MODULES=njs brotli geoip2 jwt keyval zstd
+            NGX_KEYVAL_ZONE_REDIS=1
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
           annotations: ${{ steps.meta.outputs.annotations }}
