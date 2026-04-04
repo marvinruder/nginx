@@ -1,0 +1,2 @@
+RUN --mount=type=bind,target=/root/packages/,source=/root/packages/,from=openssl-builder \
+    apk add --no-cache --allow-untrusted /root/packages/*/lib*.apk

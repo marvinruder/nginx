@@ -1,0 +1,11 @@
+ARG NGINX_FROM_IMAGE=nginx:mainline-alpine
+FROM alpine AS openssl-builder
+RUN \
+    apk add alpine-sdk perl linux-headers zlib-dev brotli-dev zstd-dev && \
+    abuild-keygen -a -n && \
+    cp /root/.abuild/*.rsa.pub /etc/apk/keys/ && \
+    mkdir /workdir && \
+    cd /workdir && \
+    wget -qO- https://gitlab.alpinelinux.org/alpine/aports/-/raw/v$(cat /etc/os-release | grep VERSION_ID | sed 's/VERSION_ID=//')/main/openssl/APKBUILD | sed 's/makedepends_host="/makedepends_host="zlib-dev brotli-dev zstd-dev /; s/no-zlib/zlib/; s/no-comp/enable-brotli enable-zstd/' | grep -v 'fips.post-install' | grep -v '^\s*$pkgname' > APKBUILD && \
+    for patch in $(cat APKBUILD | sed -n '/^source="/,/^\s*"$/p' | grep '\.patch$' | sed 's/^\s*//'); do wget -qO- https://gitlab.alpinelinux.org/alpine/aports/-/raw/v$(cat /etc/os-release | grep VERSION_ID | sed 's/VERSION_ID=//')/main/openssl/"$patch" > "$patch"; done && \
+    abuild -Fr
