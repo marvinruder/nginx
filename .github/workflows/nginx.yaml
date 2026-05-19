@@ -83,7 +83,7 @@ jobs:
 
       - name: Docker meta
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           labels: |
@@ -94,14 +94,14 @@ jobs:
             org.opencontainers.image.revision=${{ needs.prepare.outputs.BOM_SHA256 }}
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Prepare build context
         run: |
@@ -115,14 +115,15 @@ jobs:
           echo jansson-dev > jwt/build-deps
           echo hiredis-dev > keyval/build-deps
           echo zstd-dev > zstd/build-deps
-          echo https://github.com/kjdev/nginx-auth-jwt/archive/refs/tags/${{ needs.prepare.outputs.NGINX_JWT_VERSION }}.tar.gz > jwt/source
+          # Use custom tarball including submodule code
+          echo https://github.com/kjdev/nginx-auth-jwt/releases/download/${{ needs.prepare.outputs.NGINX_JWT_VERSION }}/nginx-auth-jwt-${{ needs.prepare.outputs.NGINX_JWT_VERSION }}-full.tar.gz > jwt/source
           echo https://github.com/kjdev/nginx-keyval/archive/refs/tags/${{ needs.prepare.outputs.NGINX_KEYVAL_VERSION }}.tar.gz > keyval/source
           # Pin commit SHA until https://github.com/tokers/zstd-nginx-module/pull/31#issuecomment-4169434111 is resolved:
           echo https://github.com/tokers/zstd-nginx-module/archive/f4ba115e0b0eaecde545e5f37db6aa18917d8f4b.tar.gz > zstd/source
 
       - name: Build and push by digest
         id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           build-args: |
@@ -142,7 +143,7 @@ jobs:
           touch "${{ runner.temp }}/digests/${digest#sha256:}"
 
       - name: Upload digest
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: digests-${{ steps.prepare.outputs.PLATFORM_PAIR }}
           path: ${{ runner.temp }}/digests/*
@@ -164,18 +165,18 @@ jobs:
           merge-multiple: true
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Docker meta
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           annotations: |
