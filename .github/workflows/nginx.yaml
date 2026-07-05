@@ -18,15 +18,13 @@ env:
 
 jobs:
   prepare:
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-26.04-arm
     outputs:
       BOM_SHA256: ${{ steps.bom.outputs.BOM_SHA256 }}
       BOM_SHA256_SHORT: ${{ steps.bom.outputs.BOM_SHA256_SHORT }}
       NGINX_VERSION: ${{ steps.bom.outputs.NGINX_VERSION }}
-      NGINX_JWT_VERSION: ${{ steps.bom.outputs.NGINX_JWT_VERSION }}
-      NGINX_KEYVAL_VERSION: ${{ steps.bom.outputs.NGINX_KEYVAL_VERSION }}
+      NGINX_OIDC_VERSION: ${{ steps.bom.outputs.NGINX_OIDC_VERSION }}
       NGX_ZSTD_VERSION: ${{ steps.bom.outputs.NGX_ZSTD_VERSION }}
-      NGINX_OIDC_NJS_URL: ${{ steps.bom.outputs.NGINX_OIDC_NJS_URL }}
       SKIP_BUILD: ${{ steps.check_image.outputs.SKIP_BUILD }}
     steps:
 
@@ -35,13 +33,10 @@ jobs:
         run: |
           echo BASE_IMAGE_DIGEST=$(skopeo inspect docker://docker.io/${{ env.NGINX_FROM_IMAGE }} | jq -r '.Digest') | tee -a $GITHUB_OUTPUT >> bom
           echo $(skopeo inspect docker://docker.io/${{ env.NGINX_FROM_IMAGE }} | jq -r '.Env[] | select(contains("NGINX_VERSION"))') | tee -a $GITHUB_OUTPUT >> bom
-          curl -fsSL https://raw.githubusercontent.com/nginx/pkg-oss/refs/heads/master/contrib/src/ngx_brotli/version >> bom
+          echo NGINX_OIDC_VERSION=$(curl -fsSL https://api.github.com/repos/kjdev/nginx-oidc/tags | jq -r '.[0].name') | tee -a $GITHUB_OUTPUT >> bom
           curl -fsSL https://raw.githubusercontent.com/nginx/pkg-oss/refs/heads/master/contrib/src/ngx_http_geoip2_module/version >> bom
-          curl -fsSL https://raw.githubusercontent.com/nginx/pkg-oss/refs/heads/master/contrib/src/njs/version >> bom
-          echo NGINX_JWT_VERSION=$(curl -fsSL https://api.github.com/repos/kjdev/nginx-auth-jwt/tags | jq -r '.[0].name') | tee -a $GITHUB_OUTPUT >> bom
-          echo NGINX_KEYVAL_VERSION=$(curl -fsSL https://api.github.com/repos/kjdev/nginx-keyval/tags | jq -r '.[0].name') | tee -a $GITHUB_OUTPUT >> bom
+          curl -fsSL https://raw.githubusercontent.com/nginx/pkg-oss/refs/heads/master/contrib/src/ngx_brotli/version >> bom
           echo NGX_ZSTD_VERSION=$(curl -fsSL https://api.github.com/repos/tokers/zstd-nginx-module/tags | jq -r '.[0].name') | tee -a $GITHUB_OUTPUT >> bom
-          echo NGINX_OIDC_NJS_URL=$(curl -fsSL https://api.github.com/repos/jirutka/nginx-oidc-njs/releases | jq -r '.[0].assets.[] | select(.name | test("nginx-oidc-njs-.+\\.tar\\.gz$")) | .browser_download_url') | tee -a $GITHUB_OUTPUT >> bom
           echo OPENSSL_VERSION=$(docker run --rm alpine sh -c "apk update && apk list openssl | sed 's/^openssl-\(\S*\) .*$/\1/'" | tail -n 1) | tee -a $GITHUB_OUTPUT >> bom
           cat bom
           echo BOM_SHA256=$(sha256sum bom | head -c 64) | tee -a $GITHUB_OUTPUT
@@ -64,9 +59,9 @@ jobs:
       matrix:
         include:
         - platform: linux/amd64
-          runner: ubuntu-24.04
+          runner: ubuntu-26.04
         - platform: linux/arm64
-          runner: ubuntu-24.04-arm
+          runner: ubuntu-26.04-arm
     runs-on: ${{ matrix.runner }}
     needs: prepare
     if: ${{ needs.prepare.outputs.SKIP_BUILD != 'true' || inputs.FORCE_BUILD == true }}
@@ -106,18 +101,18 @@ jobs:
       - name: Prepare build context
         run: |
           curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref }}/Dockerfile-openssl-pre > Dockerfile
-          curl -fsSL https://raw.githubusercontent.com/nginx/docker-nginx/refs/heads/master/modules/Dockerfile.alpine | sed '$s/$/ \\/; s/ARG ENABLED_MODULES/&\nARG NGX_KEYVAL_ZONE_REDIS/' >> Dockerfile
-          echo '    && rm /usr/lib/nginx/modules/*-debug.so \' >> Dockerfile
-          echo '    && mkdir -p /usr/local/share/nginx-oidc-njs \' >> Dockerfile
-          echo '    && wget -qO- ${{ needs.prepare.outputs.NGINX_OIDC_NJS_URL }} | tar xz -C /usr/local/share/nginx-oidc-njs/ --strip-components=1' >> Dockerfile
+          curl -fsSL https://raw.githubusercontent.com/nginx/docker-nginx/refs/heads/master/modules/Dockerfile.alpine | sed '$s/$/ \\/' >> Dockerfile
+          echo '    && rm /usr/lib/nginx/modules/*-debug.so' >> Dockerfile
           curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref }}/Dockerfile-openssl-post >> Dockerfile
-          mkdir jwt keyval zstd
-          echo jansson-dev > jwt/build-deps
-          echo hiredis-dev > keyval/build-deps
-          echo zstd-dev > zstd/build-deps
+          mkdir oidc zstd
+          echo openssl-dev >> oidc/build-deps
+          echo pcre2-dev >> oidc/build-deps
+          echo zlib-dev >> oidc/build-deps
+          echo jansson-dev >> oidc/build-deps
+          echo hiredis-dev >> oidc/build-deps
+          echo zstd-dev >> zstd/build-deps
           # Use custom tarball including submodule code
-          echo https://github.com/kjdev/nginx-auth-jwt/releases/download/${{ needs.prepare.outputs.NGINX_JWT_VERSION }}/nginx-auth-jwt-${{ needs.prepare.outputs.NGINX_JWT_VERSION }}-full.tar.gz > jwt/source
-          echo https://github.com/kjdev/nginx-keyval/archive/refs/tags/${{ needs.prepare.outputs.NGINX_KEYVAL_VERSION }}.tar.gz > keyval/source
+          echo https://github.com/kjdev/nginx-oidc/releases/download/${{ needs.prepare.outputs.NGINX_OIDC_VERSION }}/nginx-oidc-${{ needs.prepare.outputs.NGINX_OIDC_VERSION }}-full.tar.gz > oidc/source
           # Pin commit SHA until https://github.com/tokers/zstd-nginx-module/pull/31#issuecomment-4169434111 is resolved:
           echo https://github.com/tokers/zstd-nginx-module/archive/f4ba115e0b0eaecde545e5f37db6aa18917d8f4b.tar.gz > zstd/source
 
@@ -128,8 +123,7 @@ jobs:
           context: .
           build-args: |
             NGINX_FROM_IMAGE=${{ env.NGINX_FROM_IMAGE }}
-            ENABLED_MODULES=njs brotli geoip2 jwt keyval zstd
-            NGX_KEYVAL_ZONE_REDIS=1
+            ENABLED_MODULES=oidc geoip2 brotli zstd
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
           annotations: ${{ steps.meta.outputs.annotations }}
@@ -151,7 +145,7 @@ jobs:
           retention-days: 1
 
   merge:
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-26.04-arm
     needs:
       - prepare
       - build
